@@ -5,6 +5,8 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { migrationDataSourceOptions } from '../src/database/database-options';
 
+process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret';
+
 describe('API seam (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
