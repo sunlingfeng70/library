@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: library-postgres
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: library
+      POSTGRES_PASSWORD: library
+      POSTGRES_DB: library
+    volumes:
+      - library_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U library -d library']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  library_pgdata:

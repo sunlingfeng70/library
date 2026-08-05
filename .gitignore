@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.*
+!.env.example
+
+# tests
+coverage/
+.jest-cache/
+
+# os
+.DS_Store
+
+# logs
+*.log
+npm-debug.log*
