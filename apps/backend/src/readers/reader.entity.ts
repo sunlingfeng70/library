@@ -1,12 +1,5 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, Unique } from 'typeorm';
 
-export enum ReaderType {
-  Student = 'student',
-  Teacher = 'teacher',
-  Adult = 'adult',
-  Child = 'child',
-}
-
 @Entity('reader')
 @Unique(['cardNumber'])
 @Unique(['openid'])
@@ -20,8 +13,8 @@ export class Reader {
   @Column()
   name!: string;
 
-  @Column({ name: 'reader_type', type: 'enum', enum: ReaderType })
-  readerType!: ReaderType;
+  @Column({ name: 'reader_type' })
+  readerType!: string;
 
   @Column({ type: 'varchar', nullable: true })
   openid!: string | null;

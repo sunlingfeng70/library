@@ -11,7 +11,7 @@ import { Fine } from '../src/loans/fine.entity';
 import { Loan } from '../src/loans/loan.entity';
 import { LoanRule } from '../src/loans/loan-rule.entity';
 import { migrationDataSourceOptions } from '../src/database/database-options';
-import { Reader, ReaderType } from '../src/readers/reader.entity';
+import { Reader } from '../src/readers/reader.entity';
 import { Permission, Staff, StaffRole } from '../src/staff/staff.entity';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret';
@@ -82,7 +82,7 @@ describe('loans (e2e)', () => {
 
   async function seedReader(
     cardNumber: string,
-    readerType: ReaderType = ReaderType.Student,
+    readerType: string = 'student',
   ): Promise<Reader> {
     const repo = dataSource.getRepository(Reader);
     const reader = repo.create({
@@ -277,7 +277,7 @@ describe('loans (e2e)', () => {
 
     it('超出可借额度被拒绝（400）', async () => {
       const rule = await dataSource.getRepository(LoanRule).findOne({
-        where: { readerType: ReaderType.Student },
+        where: { readerType: 'student' },
       });
       expect(rule).toBeTruthy();
       if (rule) {
@@ -412,7 +412,7 @@ describe('loans (e2e)', () => {
   describe('T6 AC-2 逾期天数与罚款金额正确计算，宽限期生效', () => {
     it('宽限期内归还不产生罚款', async () => {
       const rule = await dataSource.getRepository(LoanRule).findOne({
-        where: { readerType: ReaderType.Student },
+        where: { readerType: 'student' },
       });
       if (rule) {
         rule.graceDays = 3;
@@ -449,7 +449,7 @@ describe('loans (e2e)', () => {
 
     it('超过宽限期归还按每日单价计算罚款', async () => {
       const rule = await dataSource.getRepository(LoanRule).findOne({
-        where: { readerType: ReaderType.Student },
+        where: { readerType: 'student' },
       });
       if (rule) {
         rule.graceDays = 3;
@@ -488,7 +488,7 @@ describe('loans (e2e)', () => {
   describe('T6 AC-3 产生罚款欠款记录；馆员可标记收款结清', () => {
     it('逾期归还产生欠款记录，馆员可结清', async () => {
       const rule = await dataSource.getRepository(LoanRule).findOne({
-        where: { readerType: ReaderType.Student },
+        where: { readerType: 'student' },
       });
       if (rule) {
         rule.graceDays = 0;
@@ -550,7 +550,7 @@ describe('loans (e2e)', () => {
 
     it('重复结清被拒绝（400）', async () => {
       const rule = await dataSource.getRepository(LoanRule).findOne({
-        where: { readerType: ReaderType.Student },
+        where: { readerType: 'student' },
       });
       if (rule) {
         rule.graceDays = 0;
@@ -601,7 +601,7 @@ describe('loans (e2e)', () => {
 
     it('无罚款权限的馆员结清被拒绝（403）', async () => {
       const rule = await dataSource.getRepository(LoanRule).findOne({
-        where: { readerType: ReaderType.Student },
+        where: { readerType: 'student' },
       });
       if (rule) {
         rule.graceDays = 0;

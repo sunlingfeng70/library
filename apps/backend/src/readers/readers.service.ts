@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcryptjs';
-import { IsEnum, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { Repository } from 'typeorm';
-import { Reader, ReaderType } from './reader.entity';
+import { ReaderType } from './reader-type.entity';
+import { Reader } from './reader.entity';
 
 export class CreateReaderDto {
   @IsString()
@@ -14,8 +15,9 @@ export class CreateReaderDto {
   @IsNotEmpty()
   name!: string;
 
-  @IsEnum(ReaderType)
-  readerType!: ReaderType;
+  @IsString()
+  @IsNotEmpty()
+  readerType!: string;
 
   @IsString()
   @MinLength(6)
@@ -26,7 +28,7 @@ export interface ReaderView {
   id: string;
   cardNumber: string;
   name: string;
-  readerType: ReaderType;
+  readerType: string;
   openidBound: boolean;
   createdAt: Date;
 }
@@ -46,12 +48,20 @@ function toView(reader: Reader): ReaderView {
 export class ReadersService {
   constructor(
     @InjectRepository(Reader) private readonly readers: Repository<Reader>,
+    @InjectRepository(ReaderType) private readonly readerTypes: Repository<ReaderType>,
   ) {}
 
   async create(dto: CreateReaderDto): Promise<ReaderView> {
     const existing = await this.readers.findOne({ where: { cardNumber: dto.cardNumber } });
     if (existing) {
       throw new BadRequestException('证号已存在');
+    }
+    const type = await this.readerTypes.findOne({ where: { code: dto.readerType } });
+    if (!type) {
+      throw new BadRequestException(`读者类型不存在: ${dto.readerType}`);
+    }
+    if (!type.enabled) {
+      throw new BadRequestException(`读者类型未启用: ${dto.readerType}`);
     }
     const created = await this.readers.save(
       this.readers.create({

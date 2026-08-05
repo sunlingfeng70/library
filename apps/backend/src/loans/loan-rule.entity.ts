@@ -1,10 +1,9 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
-import { ReaderType } from '../readers/reader.entity';
 
 @Entity('loan_rule')
 export class LoanRule {
-  @PrimaryColumn({ name: 'reader_type', type: 'enum', enum: ReaderType })
-  readerType!: ReaderType;
+  @PrimaryColumn({ name: 'reader_type' })
+  readerType!: string;
 
   @Column({ name: 'max_active_loans', type: 'int' })
   maxActiveLoans!: number;

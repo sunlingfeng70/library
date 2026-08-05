@@ -8,7 +8,7 @@ import { WechatService } from '../src/auth/wechat.service';
 import { BibliographicRecord } from '../src/bibliographic-records/bibliographic-record.entity';
 import { Copy, CopyStatus } from '../src/copies/copy.entity';
 import { migrationDataSourceOptions } from '../src/database/database-options';
-import { Reader, ReaderType } from '../src/readers/reader.entity';
+import { Reader } from '../src/readers/reader.entity';
 import { Permission, Staff, StaffRole } from '../src/staff/staff.entity';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret';
@@ -74,7 +74,7 @@ describe('copies (e2e)', () => {
     const reader = repo.create({
       cardNumber: `CR-${Date.now()}`,
       name: '馆藏读者',
-      readerType: ReaderType.Student,
+      readerType: 'student',
       passwordHash: await bcrypt.hash('reader-password-1', 10),
     });
     return repo.save(reader);

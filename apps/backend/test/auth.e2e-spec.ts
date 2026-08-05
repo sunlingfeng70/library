@@ -6,7 +6,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { WechatService } from '../src/auth/wechat.service';
 import { migrationDataSourceOptions } from '../src/database/database-options';
-import { Reader, ReaderType } from '../src/readers/reader.entity';
+import { Reader } from '../src/readers/reader.entity';
 import { Permission, Staff, StaffRole } from '../src/staff/staff.entity';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret';
@@ -81,7 +81,7 @@ describe('auth + readers (e2e)', () => {
     return repo.save(staff);
   }
 
-  async function seedReader(cardNumber: string, name: string, type: ReaderType): Promise<Reader> {
+  async function seedReader(cardNumber: string, name: string, type: string): Promise<Reader> {
     const repo = dataSource.getRepository(Reader);
     const reader = repo.create({
       cardNumber,
@@ -132,7 +132,7 @@ describe('auth + readers (e2e)', () => {
     });
 
     it('证号 + 初始密码首绑成功，之后可扫码直接登录', async () => {
-      const reader = await seedReader('R001', '张三', ReaderType.Student);
+      const reader = await seedReader('R001', '张三', 'student');
       openidByCode.set('code-bind', 'openid-zhangsan');
 
       const bind = await request(app.getHttpServer())
@@ -155,7 +155,7 @@ describe('auth + readers (e2e)', () => {
     });
 
     it('证号或初始密码错误时首绑失败', async () => {
-      await seedReader('R002', '李四', ReaderType.Teacher);
+      await seedReader('R002', '李四', 'teacher');
       openidByCode.set('code-bad', 'openid-lisi');
       const res = await request(app.getHttpServer())
         .post('/auth/bind')
@@ -165,7 +165,7 @@ describe('auth + readers (e2e)', () => {
     });
 
     it('已绑定读者用另一个 openid 二次绑定被拒绝', async () => {
-      const reader = await seedReader('R003', '赵六', ReaderType.Child);
+      const reader = await seedReader('R003', '赵六', 'child');
       openidByCode.set('code-first', 'openid-zhaoliu');
       await request(app.getHttpServer())
         .post('/auth/bind')
@@ -312,11 +312,11 @@ describe('auth + readers (e2e)', () => {
       const token = await staffToken(circulating);
       openidByCode.set('code-type', 'openid-type');
 
-      const types: ReaderType[] = [
-        ReaderType.Student,
-        ReaderType.Teacher,
-        ReaderType.Adult,
-        ReaderType.Child,
+      const types: string[] = [
+        'student',
+        'teacher',
+        'adult',
+        'child',
       ];
       for (let i = 0; i < types.length; i++) {
         const cardNumber = `RT00${i}`;
