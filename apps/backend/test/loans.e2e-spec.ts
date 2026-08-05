@@ -7,6 +7,8 @@ import { AppModule } from '../src/app.module';
 import { WechatService } from '../src/auth/wechat.service';
 import { BibliographicRecord } from '../src/bibliographic-records/bibliographic-record.entity';
 import { Copy, CopyStatus } from '../src/copies/copy.entity';
+import { Fine } from '../src/loans/fine.entity';
+import { Loan } from '../src/loans/loan.entity';
 import { LoanRule } from '../src/loans/loan-rule.entity';
 import { migrationDataSourceOptions } from '../src/database/database-options';
 import { Reader, ReaderType } from '../src/readers/reader.entity';
@@ -129,11 +131,11 @@ describe('loans (e2e)', () => {
       'TRUNCATE "loan", "loan_rule", "reader", "staff", "bibliographic_record", "copy" RESTART IDENTITY CASCADE',
     );
     await dataSource.query(`
-      INSERT INTO "loan_rule" ("reader_type", "max_active_loans", "loan_duration_days") VALUES
-        ('student', 5, 30),
-        ('teacher', 10, 60),
-        ('adult', 5, 30),
-        ('child', 3, 21)
+      INSERT INTO "loan_rule" ("reader_type", "max_active_loans", "loan_duration_days", "fine_daily_fee_cents", "grace_days") VALUES
+        ('student', 5, 30, 50, 3),
+        ('teacher', 10, 60, 50, 3),
+        ('adult', 5, 30, 50, 3),
+        ('child', 3, 21, 30, 3)
     `);
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -352,6 +354,293 @@ describe('loans (e2e)', () => {
       const res = await request(app.getHttpServer())
         .get('/loans/me')
         .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(res.body.message).toBeTruthy();
+    });
+  });
+
+  describe('T6 AC-1 馆员可办理归还，副本状态回到在馆', () => {
+    it('归还成功：副本状态回到在馆，借阅记录 closed', async () => {
+      const reader = await seedReader(`CR-RET1-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-RET1-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const token = await staffToken(circulation);
+      await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+      expect(res.body).toMatchObject({ copyBarcode: copy.barcode, fine: null });
+      expect((res.body as { returnedAt: string }).returnedAt).toBeTruthy();
+
+      const persisted = await dataSource.getRepository(Copy).findOne({
+        where: { id: copy.id },
+      });
+      expect(persisted?.status).toBe(CopyStatus.Available);
+    });
+
+    it('归还未在借的副本被拒绝（400）', async () => {
+      const copy = await seedAvailableCopy(`BC-RET2-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const token = await staffToken(circulation);
+      const res = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ barcode: copy.barcode })
+        .expect(400);
+      expect(res.body.message).toBeTruthy();
+    });
+
+    it('归还不存在的条码返回 404', async () => {
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const token = await staffToken(circulation);
+      const res = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ barcode: 'BC-RET-NONE' })
+        .expect(404);
+      expect(res.body.message).toBeTruthy();
+    });
+  });
+
+  describe('T6 AC-2 逾期天数与罚款金额正确计算，宽限期生效', () => {
+    it('宽限期内归还不产生罚款', async () => {
+      const rule = await dataSource.getRepository(LoanRule).findOne({
+        where: { readerType: ReaderType.Student },
+      });
+      if (rule) {
+        rule.graceDays = 3;
+        rule.fineDailyFeeCents = 50;
+        await dataSource.getRepository(LoanRule).save(rule);
+      }
+
+      const reader = await seedReader(`CR-RET3-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-RET3-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const token = await staffToken(circulation);
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      const loan = await dataSource.getRepository(Loan).findOne({ where: { id: loanId } });
+      if (!loan) {
+        throw new Error('loan missing');
+      }
+      loan.borrowedAt = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      loan.dueAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      await dataSource.getRepository(Loan).save(loan);
+
+      const res = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+      expect(res.body.fine).toBeNull();
+    });
+
+    it('超过宽限期归还按每日单价计算罚款', async () => {
+      const rule = await dataSource.getRepository(LoanRule).findOne({
+        where: { readerType: ReaderType.Student },
+      });
+      if (rule) {
+        rule.graceDays = 3;
+        rule.fineDailyFeeCents = 50;
+        await dataSource.getRepository(LoanRule).save(rule);
+      }
+
+      const reader = await seedReader(`CR-RET4-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-RET4-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const token = await staffToken(circulation);
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      const loan = await dataSource.getRepository(Loan).findOne({ where: { id: loanId } });
+      if (!loan) {
+        throw new Error('loan missing');
+      }
+      loan.borrowedAt = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      loan.dueAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      await dataSource.getRepository(Loan).save(loan);
+
+      const res = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+      expect(res.body.fine).toMatchObject({ amountCents: 350, reason: '逾期 7 天' });
+    });
+  });
+
+  describe('T6 AC-3 产生罚款欠款记录；馆员可标记收款结清', () => {
+    it('逾期归还产生欠款记录，馆员可结清', async () => {
+      const rule = await dataSource.getRepository(LoanRule).findOne({
+        where: { readerType: ReaderType.Student },
+      });
+      if (rule) {
+        rule.graceDays = 0;
+        rule.fineDailyFeeCents = 100;
+        await dataSource.getRepository(LoanRule).save(rule);
+      }
+
+      const reader = await seedReader(`CR-RET5-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-RET5-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const fineManager = await seedLibrarian([Permission.Circulation, Permission.Fine]);
+      const circulationToken = await staffToken(circulation);
+      const fineToken = await staffToken(fineManager);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      const loan = await dataSource.getRepository(Loan).findOne({ where: { id: loanId } });
+      if (!loan) {
+        throw new Error('loan missing');
+      }
+      loan.borrowedAt = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      loan.dueAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      await dataSource.getRepository(Loan).save(loan);
+
+      const returned = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+      const fineId = returned.body.fine.id as string;
+      expect(returned.body.fine.amountCents).toBe(500);
+
+      const persisted = await dataSource.getRepository(Fine).findOne({
+        where: { id: fineId },
+      });
+      expect(persisted).toMatchObject({
+        readerId: reader.id,
+        loanId,
+        amountCents: 500,
+        settledAt: null,
+      });
+
+      const settled = await request(app.getHttpServer())
+        .patch(`/loans/fines/${fineId}/settle`)
+        .set('Authorization', `Bearer ${fineToken}`)
+        .expect(200);
+      expect((settled.body as { settledAt: string }).settledAt).toBeTruthy();
+
+      const settledPersisted = await dataSource.getRepository(Fine).findOne({
+        where: { id: fineId },
+      });
+      expect(settledPersisted?.settledAt).toBeTruthy();
+    });
+
+    it('重复结清被拒绝（400）', async () => {
+      const rule = await dataSource.getRepository(LoanRule).findOne({
+        where: { readerType: ReaderType.Student },
+      });
+      if (rule) {
+        rule.graceDays = 0;
+        rule.fineDailyFeeCents = 100;
+        await dataSource.getRepository(LoanRule).save(rule);
+      }
+
+      const reader = await seedReader(`CR-RET6-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-RET6-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const fineManager = await seedLibrarian([Permission.Circulation, Permission.Fine]);
+      const circulationToken = await staffToken(circulation);
+      const fineToken = await staffToken(fineManager);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      const loan = await dataSource.getRepository(Loan).findOne({ where: { id: loanId } });
+      if (!loan) {
+        throw new Error('loan missing');
+      }
+      loan.borrowedAt = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      loan.dueAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      await dataSource.getRepository(Loan).save(loan);
+
+      const returned = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+      const fineId = returned.body.fine.id as string;
+
+      await request(app.getHttpServer())
+        .patch(`/loans/fines/${fineId}/settle`)
+        .set('Authorization', `Bearer ${fineToken}`)
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/loans/fines/${fineId}/settle`)
+        .set('Authorization', `Bearer ${fineToken}`)
+        .expect(400);
+      expect(res.body.message).toBeTruthy();
+    });
+
+    it('无罚款权限的馆员结清被拒绝（403）', async () => {
+      const rule = await dataSource.getRepository(LoanRule).findOne({
+        where: { readerType: ReaderType.Student },
+      });
+      if (rule) {
+        rule.graceDays = 0;
+        rule.fineDailyFeeCents = 100;
+        await dataSource.getRepository(LoanRule).save(rule);
+      }
+
+      const reader = await seedReader(`CR-RET7-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-RET7-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const noFine = await seedLibrarian([Permission.Circulation]);
+      const circulationToken = await staffToken(circulation);
+      const noFineToken = await staffToken(noFine);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      const loan = await dataSource.getRepository(Loan).findOne({ where: { id: loanId } });
+      if (!loan) {
+        throw new Error('loan missing');
+      }
+      loan.borrowedAt = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      loan.dueAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      await dataSource.getRepository(Loan).save(loan);
+
+      const returned = await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+      const fineId = returned.body.fine.id as string;
+
+      const res = await request(app.getHttpServer())
+        .patch(`/loans/fines/${fineId}/settle`)
+        .set('Authorization', `Bearer ${noFineToken}`)
         .expect(403);
       expect(res.body.message).toBeTruthy();
     });

@@ -11,4 +11,10 @@ export class LoanRule {
 
   @Column({ name: 'loan_duration_days', type: 'int' })
   loanDurationDays!: number;
+
+  @Column({ name: 'fine_daily_fee_cents', type: 'int' })
+  fineDailyFeeCents!: number;
+
+  @Column({ name: 'grace_days', type: 'int' })
+  graceDays!: number;
 }

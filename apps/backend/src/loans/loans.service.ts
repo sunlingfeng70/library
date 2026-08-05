@@ -4,6 +4,7 @@ import { IsNotEmpty, IsString } from 'class-validator';
 import { DataSource, Repository } from 'typeorm';
 import { Copy, CopyStatus } from '../copies/copy.entity';
 import { Reader } from '../readers/reader.entity';
+import { Fine } from './fine.entity';
 import { LoanRule } from './loan-rule.entity';
 import { Loan } from './loan.entity';
 
@@ -12,6 +13,12 @@ export class CheckoutDto {
   @IsNotEmpty()
   readerCardNumber!: string;
 
+  @IsString()
+  @IsNotEmpty()
+  barcode!: string;
+}
+
+export class ReturnDto {
   @IsString()
   @IsNotEmpty()
   barcode!: string;
@@ -26,6 +33,20 @@ export interface LoanView {
   returnedAt: Date | null;
 }
 
+export interface ReturnView extends LoanView {
+  fine?: { id: string; amountCents: number; reason: string } | null;
+}
+
+export interface FineView {
+  id: string;
+  loanId: string;
+  readerId: string;
+  amountCents: number;
+  reason: string;
+  settledAt: Date | null;
+  createdAt: Date;
+}
+
 function toView(loan: Loan, barcode: string): LoanView {
   return {
     id: loan.id,
@@ -37,10 +58,24 @@ function toView(loan: Loan, barcode: string): LoanView {
   };
 }
 
+function millisPerDay(): number {
+  return 24 * 60 * 60 * 1000;
+}
+
+function overdueDays(returnedAt: Date, dueAt: Date, graceDays: number): number {
+  const graceEndMs = dueAt.getTime() + graceDays * millisPerDay();
+  const lateMs = returnedAt.getTime() - graceEndMs;
+  if (lateMs <= 0) {
+    return 0;
+  }
+  return Math.floor(lateMs / millisPerDay());
+}
+
 @Injectable()
 export class LoansService {
   constructor(
     @InjectRepository(Loan) private readonly loans: Repository<Loan>,
+    @InjectRepository(Fine) private readonly fines: Repository<Fine>,
     @InjectDataSource() private readonly dataSource: DataSource,
   ) {}
 
@@ -119,5 +154,94 @@ export class LoansService {
       order: { borrowedAt: 'DESC' },
     });
     return loans.map((loan) => toView(loan, loan.copy.barcode));
+  }
+
+  async returnCopy(dto: ReturnDto): Promise<ReturnView> {
+    return this.dataSource.transaction(async (manager) => {
+      const copy = await manager
+        .getRepository(Copy)
+        .findOne({ where: { barcode: dto.barcode.trim() } });
+      if (!copy) {
+        throw new NotFoundException('馆藏副本不存在');
+      }
+
+      const loan = await manager
+        .getRepository(Loan)
+        .createQueryBuilder('loan')
+        .where('loan.copy_id = :copyId', { copyId: copy.id })
+        .andWhere('loan.returned_at IS NULL')
+        .setLock('pessimistic_write')
+        .getOne();
+      if (!loan) {
+        throw new BadRequestException('该副本当前不在借');
+      }
+
+      const now = new Date();
+      loan.returnedAt = now;
+      const saved = await manager.getRepository(Loan).save(loan);
+
+      const updatedCopy = await manager.getRepository(Copy).update(
+        { id: copy.id, status: CopyStatus.Borrowed },
+        { status: CopyStatus.Available },
+      );
+      if (!updatedCopy.affected || updatedCopy.affected === 0) {
+        throw new BadRequestException('副本状态异常，归还已回滚');
+      }
+
+      const reader = await manager.getRepository(Reader).findOne({
+        where: { id: loan.readerId },
+      });
+      if (!reader) {
+        throw new BadRequestException('借阅记录的读者不存在');
+      }
+      const rule = await manager
+        .getRepository(LoanRule)
+        .findOne({ where: { readerType: reader.readerType } });
+      if (!rule) {
+        throw new BadRequestException('该读者类型的借阅规则未配置');
+      }
+
+      const days = overdueDays(now, loan.dueAt, rule.graceDays);
+      let fine: Fine | null = null;
+      if (days > 0) {
+        const amountCents = days * rule.fineDailyFeeCents;
+        fine = await manager.getRepository(Fine).save(
+          manager.getRepository(Fine).create({
+            loanId: loan.id,
+            readerId: loan.readerId,
+            amountCents,
+            reason: `逾期 ${days} 天`,
+            settledAt: null,
+          }),
+        );
+      }
+
+      return { ...toView(saved, copy.barcode), fine: fine ? { id: fine.id, amountCents: fine.amountCents, reason: fine.reason } : null };
+    });
+  }
+
+  async settle(fineId: string): Promise<FineView> {
+    const fine = await this.fines.findOne({ where: { id: fineId } });
+    if (!fine) {
+      throw new NotFoundException('罚款记录不存在');
+    }
+    if (fine.settledAt) {
+      throw new BadRequestException('罚款已结清');
+    }
+    fine.settledAt = new Date();
+    const saved = await this.fines.save(fine);
+    return this.toFineView(saved);
+  }
+
+  private toFineView(fine: Fine): FineView {
+    return {
+      id: fine.id,
+      loanId: fine.loanId,
+      readerId: fine.readerId,
+      amountCents: fine.amountCents,
+      reason: fine.reason,
+      settledAt: fine.settledAt,
+      createdAt: fine.createdAt,
+    };
   }
 }
