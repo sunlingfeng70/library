@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
+import { BibliographicRecordsModule } from './bibliographic-records/bibliographic-records.module';
 import { databaseOptions } from './database/database-options';
 import { ReadersModule } from './readers/readers.module';
 import { StaffModule } from './staff/staff.module';
@@ -15,6 +16,7 @@ import { StaffModule } from './staff/staff.module';
       useFactory: (config: ConfigService) => databaseOptions(config),
     }),
     AuthModule,
+    BibliographicRecordsModule,
     ReadersModule,
     StaffModule,
   ],
