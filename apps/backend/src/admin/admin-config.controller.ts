@@ -6,6 +6,7 @@ import { StaffRole } from '../staff/staff.entity';
 import {
   AdminConfigService,
   CreateReaderTypeDto,
+  UpdateInstitutionConfigDto,
   UpdateReaderTypeDto,
   UpsertLoanRuleDto,
 } from './admin-config.service';
@@ -39,5 +40,15 @@ export class AdminConfigController {
   @Patch('reader-types/:code')
   updateReaderType(@Param('code') code: string, @Body() dto: UpdateReaderTypeDto) {
     return this.config.updateReaderType(code, dto);
+  }
+
+  @Get('institution')
+  getInstitution() {
+    return this.config.getInstitutionConfig();
+  }
+
+  @Put('institution')
+  updateInstitution(@Body() dto: UpdateInstitutionConfigDto) {
+    return this.config.updateInstitutionConfig(dto);
   }
 }

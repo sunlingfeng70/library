@@ -6,9 +6,10 @@ import { ReaderType } from '../readers/reader-type.entity';
 import { Staff } from '../staff/staff.entity';
 import { AdminConfigController } from './admin-config.controller';
 import { AdminConfigService } from './admin-config.service';
+import { InstitutionConfig } from './institution-config.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([LoanRule, ReaderType, Staff]), AuthModule],
+  imports: [TypeOrmModule.forFeature([LoanRule, ReaderType, Staff, InstitutionConfig]), AuthModule],
   controllers: [AdminConfigController],
   providers: [AdminConfigService],
 })

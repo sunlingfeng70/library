@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Repository } from 'typeorm';
+import { InstitutionConfig, InstitutionType, DEFAULT_INSTITUTION_CONFIG } from './institution-config.entity';
 import { LoanRule } from '../loans/loan-rule.entity';
 import { ReaderType } from '../readers/reader-type.entity';
 
@@ -71,6 +72,28 @@ export class UpdateReaderTypeDto {
   enabled?: boolean;
 }
 
+export class UpdateInstitutionConfigDto {
+  @IsEnum(InstitutionType)
+  @IsOptional()
+  institutionType?: InstitutionType;
+
+  @IsBoolean()
+  @IsOptional()
+  reservationEnabled?: boolean;
+
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  @IsOptional()
+  reservationHoldDays?: number;
+}
+
+export interface InstitutionConfigView {
+  institutionType: InstitutionType;
+  reservationEnabled: boolean;
+  reservationHoldDays: number;
+}
+
 export interface LoanRuleView {
   readerType: string;
   maxActiveLoans: number;
@@ -101,12 +124,41 @@ function toTypeView(type: ReaderType): ReaderTypeView {
   return { code: type.code, name: type.name, enabled: type.enabled };
 }
 
+function toConfigView(config: InstitutionConfig): InstitutionConfigView {
+  return {
+    institutionType: config.institutionType,
+    reservationEnabled: config.reservationEnabled,
+    reservationHoldDays: config.reservationHoldDays,
+  };
+}
+
 @Injectable()
 export class AdminConfigService {
   constructor(
     @InjectRepository(LoanRule) private readonly loanRules: Repository<LoanRule>,
     @InjectRepository(ReaderType) private readonly readerTypes: Repository<ReaderType>,
+    @InjectRepository(InstitutionConfig)
+    private readonly institutionConfigs: Repository<InstitutionConfig>,
   ) {}
+
+  async getInstitutionConfig(): Promise<InstitutionConfigView> {
+    return toConfigView(await this.getOrCreateInstitutionConfig());
+  }
+
+  async updateInstitutionConfig(dto: UpdateInstitutionConfigDto): Promise<InstitutionConfigView> {
+    const config = await this.getOrCreateInstitutionConfig();
+    if (dto.institutionType !== undefined) {
+      config.institutionType = dto.institutionType;
+    }
+    if (dto.reservationEnabled !== undefined) {
+      config.reservationEnabled = dto.reservationEnabled;
+    }
+    if (dto.reservationHoldDays !== undefined) {
+      config.reservationHoldDays = dto.reservationHoldDays;
+    }
+    const saved = await this.institutionConfigs.save(config);
+    return toConfigView(saved);
+  }
 
   async listLoanRules(): Promise<LoanRuleView[]> {
     const rows = await this.loanRules.find({ order: { readerType: 'ASC' } });
@@ -168,5 +220,14 @@ export class AdminConfigService {
     }
     const saved = await this.readerTypes.save(type);
     return toTypeView(saved);
+  }
+
+  private async getOrCreateInstitutionConfig(): Promise<InstitutionConfig> {
+    let config = await this.institutionConfigs.findOne({ where: { id: 1 } });
+    if (!config) {
+      config = this.institutionConfigs.create({ id: 1, ...DEFAULT_INSTITUTION_CONFIG });
+      config = await this.institutionConfigs.save(config);
+    }
+    return config;
   }
 }
