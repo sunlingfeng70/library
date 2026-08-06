@@ -18,6 +18,7 @@ import {
   BibliographicRecordsService,
   CreateByIsbnDto,
   CreateBibliographicRecordDto,
+  NaturalSearchQuery,
   SearchBibliographicRecordsQuery,
   SuggestIsbnQuery,
   UpdateBibliographicRecordDto,
@@ -38,6 +39,12 @@ export class BibliographicRecordsController {
   @UseGuards(JwtAuthGuard)
   search(@Query() query: SearchBibliographicRecordsQuery) {
     return this.records.search(query);
+  }
+
+  @Get('natural')
+  @UseGuards(JwtAuthGuard)
+  naturalSearch(@Query() query: NaturalSearchQuery) {
+    return this.records.naturalSearch(query.q);
   }
 
   @Get('isbn-suggestion')

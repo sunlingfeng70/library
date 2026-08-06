@@ -8,6 +8,14 @@ export enum ReadingGrade {
   Adult = 'adult',
 }
 
+export const READING_GRADE_LABELS: Record<ReadingGrade, string> = {
+  [ReadingGrade.PrimaryLow]: '小学低年级',
+  [ReadingGrade.PrimaryHigh]: '小学高年级',
+  [ReadingGrade.Middle]: '初中',
+  [ReadingGrade.Senior]: '高中',
+  [ReadingGrade.Adult]: '成人',
+};
+
 @Entity('bibliographic_record')
 @Unique(['isbn'])
 export class BibliographicRecord {

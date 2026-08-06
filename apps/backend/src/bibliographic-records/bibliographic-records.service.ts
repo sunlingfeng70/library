@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Transform } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsOptional,
@@ -10,9 +11,16 @@ import {
   Matches,
   ValidateIf,
 } from 'class-validator';
-import { Like, Raw, Repository } from 'typeorm';
+import { In, Like, Not, Raw, Repository } from 'typeorm';
+import { AiProvider } from '../ai/ai-provider.service';
+import { EmbeddingService } from '../ai/embedding.service';
 import { ReadingTagSuggestion, ReadingTagSuggester } from '../ai/reading-tag-suggester.service';
-import { BibliographicRecord, ReadingGrade } from './bibliographic-record.entity';
+import { SearchIntent, SearchIntentParser } from '../ai/search-intent-parser.service';
+import {
+  BibliographicRecord,
+  READING_GRADE_LABELS,
+  ReadingGrade,
+} from './bibliographic-record.entity';
 import { IsbnLookupResult, IsbnLookupService } from './isbn-lookup.service';
 
 const trimString = ({ value }: { value: unknown }): unknown =>
@@ -136,6 +144,34 @@ export class SearchBibliographicRecordsQuery {
   @IsString()
   @IsNotEmpty()
   subject?: string;
+
+  @Transform(trimArray)
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  subjects?: string[];
+
+  @Transform(({ value }) =>
+    value === true || value === 'true'
+      ? true
+      : value === false || value === 'false'
+        ? false
+        : undefined,
+  )
+  @IsBoolean()
+  @IsOptional()
+  available?: boolean;
+}
+
+export interface NaturalSearchResult extends BibliographicRecordView {
+  reason: string;
+}
+
+export class NaturalSearchQuery {
+  @Transform(trimString)
+  @IsString({ message: '查询词格式不正确' })
+  @IsNotEmpty({ message: '查询词不能为空' })
+  q!: string;
 }
 
 export interface BibliographicRecordView {
@@ -171,6 +207,9 @@ export class BibliographicRecordsService {
     private readonly records: Repository<BibliographicRecord>,
     private readonly isbnLookup: IsbnLookupService,
     private readonly tagSuggester: ReadingTagSuggester,
+    private readonly intentParser: SearchIntentParser,
+    private readonly aiProvider: AiProvider,
+    private readonly embedding: EmbeddingService,
   ) {}
 
   async create(dto: CreateBibliographicRecordDto): Promise<BibliographicRecordView> {
@@ -192,6 +231,7 @@ export class BibliographicRecordsService {
           subjects: dto.subjects ?? null,
         }),
       );
+      this.embed(created.id, created);
       return toView(created);
     } catch (error) {
       if (this.isUniqueViolation(error)) {
@@ -203,6 +243,7 @@ export class BibliographicRecordsService {
 
   async search(query: SearchBibliographicRecordsQuery): Promise<BibliographicRecordView[]> {
     const where = {
+      ...(await this.availabilityClause(query.available)),
       ...(query.title ? { title: Like(`%${query.title}%`) } : {}),
       ...(query.isbn ? { isbn: Like(`%${query.isbn}%`) } : {}),
       ...(query.readingGrade ? { readingGrade: query.readingGrade } : {}),
@@ -212,6 +253,15 @@ export class BibliographicRecordsService {
               (alias) =>
                 `EXISTS (SELECT 1 FROM unnest(${alias}) AS s WHERE s ILIKE :subject)`,
               { subject: `%${query.subject}%` },
+            ),
+          }
+        : {}),
+      ...(query.subjects && query.subjects.length > 0
+        ? {
+            subjects: Raw(
+              (alias) =>
+                `EXISTS (SELECT 1 FROM unnest(${alias}) AS s WHERE s ILIKE ANY(:subjects))`,
+              { subjects: query.subjects.map((s) => `%${s}%`) },
             ),
           }
         : {}),
@@ -248,6 +298,7 @@ export class BibliographicRecordsService {
         subjects: null,
       }),
     );
+    this.embed(created.id, created);
     return toView(created);
   }
 
@@ -299,7 +350,115 @@ export class BibliographicRecordsService {
       record.subjects = dto.subjects;
     }
     const saved = await this.records.save(record);
+    this.embed(saved.id, saved);
     return toView(saved);
+  }
+
+  async naturalSearch(query: string): Promise<NaturalSearchResult[]> {
+    const intent = await this.intentParser.parse(query);
+    const hasFilters =
+      Boolean(intent.title) ||
+      Boolean(intent.readingGrade) ||
+      (intent.subjects?.length ?? 0) > 0 ||
+      intent.available !== undefined;
+    if (hasFilters) {
+      const structured = await this.search({
+        title: intent.title,
+        readingGrade: intent.readingGrade,
+        subjects: intent.subjects,
+        available: intent.available,
+      });
+      if (structured.length > 0) {
+        const reason = this.describeFilters(intent);
+        return structured.map((record) => ({ ...record, reason }));
+      }
+    }
+    return this.semanticSearch(query, intent);
+  }
+
+  private async semanticSearch(
+    query: string,
+    intent: SearchIntent,
+  ): Promise<NaturalSearchResult[]> {
+    const queryVector = await this.aiProvider.embed(query);
+    if (!queryVector || queryVector.length === 0) {
+      return [];
+    }
+    const matches = await this.embedding.searchSimilar(queryVector, 10);
+    if (matches.length === 0) {
+      return [];
+    }
+    const rows = await this.records.findBy({ id: In(matches.map((m) => m.recordId)) });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const availableIds = intent.available !== undefined ? new Set(await this.availableRecordIds()) : null;
+    return matches
+      .map((match) => byId.get(match.recordId))
+      .filter((row): row is BibliographicRecord => row !== undefined)
+      .filter((row) => this.matchesHardConstraints(row, intent, availableIds))
+      .map((row) => ({ ...toView(row), reason: `与「${query}」语义相近` }));
+  }
+
+  private matchesHardConstraints(
+    record: BibliographicRecord,
+    intent: SearchIntent,
+    availableIds: Set<string> | null,
+  ): boolean {
+    if (intent.readingGrade && record.readingGrade !== intent.readingGrade) {
+      return false;
+    }
+    if (intent.available === true) {
+      return availableIds !== null && availableIds.has(record.id);
+    }
+    if (intent.available === false) {
+      return availableIds !== null && !availableIds.has(record.id);
+    }
+    return true;
+  }
+
+  private async availabilityClause(
+    available: boolean | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (available === undefined) {
+      return {};
+    }
+    const ids = await this.availableRecordIds();
+    if (available) {
+      return ids.length > 0 ? { id: In(ids) } : { id: In([]) };
+    }
+    return ids.length > 0 ? { id: Not(In(ids)) } : {};
+  }
+
+  private async availableRecordIds(): Promise<string[]> {
+    const rows = await this.records.query<{ id: string }[]>(
+      `SELECT DISTINCT "bibliographic_record_id" AS "id"
+       FROM "copy"
+       WHERE "status" = 'available'`,
+    );
+    return rows.map((row) => row.id);
+  }
+
+  private embed(recordId: string, record: BibliographicRecord): void {
+    const text = [record.title, record.category, ...(record.subjects ?? [])]
+      .filter((part): part is string => Boolean(part))
+      .join(' ');
+    void this.embedding.embedAndStore(recordId, text);
+  }
+
+  private describeFilters(intent: SearchIntent): string {
+    const parts: string[] = [];
+    if (intent.title) {
+      parts.push(`题名含「${intent.title}」`);
+    }
+    if (intent.readingGrade) {
+      parts.push(`适读年级「${READING_GRADE_LABELS[intent.readingGrade]}」`);
+    }
+    if (intent.subjects && intent.subjects.length > 0) {
+      parts.push(`学科「${intent.subjects.join('、')}」`);
+    }
+    if (intent.available === true) {
+      parts.push('有在馆副本');
+    }
+    return parts.length > 0 ? `匹配${parts.join('，')}` : '匹配查询条件';
   }
 
   private isUniqueViolation(error: unknown): boolean {
