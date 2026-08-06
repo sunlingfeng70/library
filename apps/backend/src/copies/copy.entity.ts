@@ -4,6 +4,7 @@ import { BibliographicRecord } from '../bibliographic-records/bibliographic-reco
 export enum CopyStatus {
   Available = 'available',
   Borrowed = 'borrowed',
+  OnHold = 'on_hold',
   Damaged = 'damaged',
   OffShelf = 'off_shelf',
 }
