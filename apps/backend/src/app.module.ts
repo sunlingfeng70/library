@@ -8,6 +8,7 @@ import { BibliographicRecordsModule } from './bibliographic-records/bibliographi
 import { CopiesModule } from './copies/copies.module';
 import { databaseOptions } from './database/database-options';
 import { LoansModule } from './loans/loans.module';
+import { RecommendationsModule } from './recommendations/recommendations.module';
 import { ReadersModule } from './readers/readers.module';
 import { ReservationsModule } from './reservations/reservations.module';
 import { StaffModule } from './staff/staff.module';
@@ -24,6 +25,7 @@ import { StaffModule } from './staff/staff.module';
     BibliographicRecordsModule,
     CopiesModule,
     LoansModule,
+    RecommendationsModule,
     ReadersModule,
     ReservationsModule,
     StaffModule,
