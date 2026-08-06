@@ -14,6 +14,7 @@ const DEFAULT_LOAN_RULE = {
   loanDurationDays: 30,
   fineDailyFeeCents: 50,
   graceDays: 3,
+  renewalLimit: 1,
 } as const;
 
 export class UpsertLoanRuleDto {
@@ -36,6 +37,11 @@ export class UpsertLoanRuleDto {
   @Min(0)
   @Max(365)
   graceDays!: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  renewalLimit!: number;
 }
 
 export class CreateReaderTypeDto {
@@ -71,6 +77,7 @@ export interface LoanRuleView {
   loanDurationDays: number;
   fineDailyFeeCents: number;
   graceDays: number;
+  renewalLimit: number;
 }
 
 export interface ReaderTypeView {
@@ -86,6 +93,7 @@ function toRuleView(rule: LoanRule): LoanRuleView {
     loanDurationDays: rule.loanDurationDays,
     fineDailyFeeCents: rule.fineDailyFeeCents,
     graceDays: rule.graceDays,
+    renewalLimit: rule.renewalLimit,
   };
 }
 
@@ -121,6 +129,7 @@ export class AdminConfigService {
     rule.loanDurationDays = dto.loanDurationDays;
     rule.fineDailyFeeCents = dto.fineDailyFeeCents;
     rule.graceDays = dto.graceDays;
+    rule.renewalLimit = dto.renewalLimit;
     const saved = await this.loanRules.save(rule);
     return toRuleView(saved);
   }

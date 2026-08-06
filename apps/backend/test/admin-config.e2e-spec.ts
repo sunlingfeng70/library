@@ -104,11 +104,11 @@ describe('admin config (e2e)', () => {
         ('child', '少儿', true)
     `);
     await dataSource.query(`
-      INSERT INTO "loan_rule" ("reader_type", "max_active_loans", "loan_duration_days", "fine_daily_fee_cents", "grace_days") VALUES
-        ('student', 5, 30, 50, 3),
-        ('teacher', 10, 60, 50, 3),
-        ('adult', 5, 30, 50, 3),
-        ('child', 3, 21, 30, 3)
+      INSERT INTO "loan_rule" ("reader_type", "max_active_loans", "loan_duration_days", "fine_daily_fee_cents", "grace_days", "renewal_limit") VALUES
+        ('student', 5, 30, 50, 3, 1),
+        ('teacher', 10, 60, 50, 3, 2),
+        ('adult', 5, 30, 50, 3, 1),
+        ('child', 3, 21, 30, 3, 0)
     `);
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -144,7 +144,7 @@ describe('admin config (e2e)', () => {
       const updated = await request(app.getHttpServer())
         .put('/admin/loan-rules/student')
         .set('Authorization', `Bearer ${token}`)
-        .send({ maxActiveLoans: 2, loanDurationDays: 14, fineDailyFeeCents: 80, graceDays: 1 })
+        .send({ maxActiveLoans: 2, loanDurationDays: 14, fineDailyFeeCents: 80, graceDays: 1, renewalLimit: 1 })
         .expect(200);
       expect(updated.body).toMatchObject({
         readerType: 'student',
@@ -152,6 +152,7 @@ describe('admin config (e2e)', () => {
         loanDurationDays: 14,
         fineDailyFeeCents: 80,
         graceDays: 1,
+        renewalLimit: 1,
       });
     });
 
@@ -161,7 +162,7 @@ describe('admin config (e2e)', () => {
       const res = await request(app.getHttpServer())
         .put('/admin/loan-rules/nonexistent')
         .set('Authorization', `Bearer ${token}`)
-        .send({ maxActiveLoans: 2, loanDurationDays: 14, fineDailyFeeCents: 80, graceDays: 1 })
+        .send({ maxActiveLoans: 2, loanDurationDays: 14, fineDailyFeeCents: 80, graceDays: 1, renewalLimit: 1 })
         .expect(404);
       expect(res.body.message).toBeTruthy();
     });
@@ -172,7 +173,7 @@ describe('admin config (e2e)', () => {
       const res = await request(app.getHttpServer())
         .put('/admin/loan-rules/student')
         .set('Authorization', `Bearer ${token}`)
-        .send({ maxActiveLoans: 0, loanDurationDays: -1, fineDailyFeeCents: 80, graceDays: 1 })
+        .send({ maxActiveLoans: 0, loanDurationDays: -1, fineDailyFeeCents: 80, graceDays: 1, renewalLimit: 1 })
         .expect(400);
       expect(res.body.message).toBeTruthy();
     });
@@ -233,7 +234,7 @@ describe('admin config (e2e)', () => {
       await request(app.getHttpServer())
         .put('/admin/loan-rules/student')
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ maxActiveLoans: 1, loanDurationDays: 30, fineDailyFeeCents: 50, graceDays: 3 })
+        .send({ maxActiveLoans: 1, loanDurationDays: 30, fineDailyFeeCents: 50, graceDays: 3, renewalLimit: 1 })
         .expect(200);
 
       const circulation = await seedStaff(StaffRole.Librarian);
