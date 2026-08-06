@@ -40,4 +40,13 @@ export class LoansController {
     }
     return this.loans.listByReader(user.id);
   }
+
+  @Post('me/:id/renew')
+  @UseGuards(JwtAuthGuard)
+  renew(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthPrincipal) {
+    if (user.kind !== 'reader') {
+      throw new ForbiddenException('仅读者可续借');
+    }
+    return this.loans.renew(user.id, id);
+  }
 }

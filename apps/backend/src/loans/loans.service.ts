@@ -31,6 +31,7 @@ export interface LoanView {
   borrowedAt: Date;
   dueAt: Date;
   returnedAt: Date | null;
+  renewalCount: number;
 }
 
 export interface ReturnView extends LoanView {
@@ -55,6 +56,7 @@ function toView(loan: Loan, barcode: string): LoanView {
     borrowedAt: loan.borrowedAt,
     dueAt: loan.dueAt,
     returnedAt: loan.returnedAt,
+    renewalCount: loan.renewalCount,
   };
 }
 
@@ -217,6 +219,46 @@ export class LoansService {
       }
 
       return { ...toView(saved, copy.barcode), fine: fine ? { id: fine.id, amountCents: fine.amountCents, reason: fine.reason } : null };
+    });
+  }
+
+  async renew(readerId: string, loanId: string): Promise<LoanView> {
+    return this.dataSource.transaction(async (manager) => {
+      const loan = await manager.getRepository(Loan).findOne({
+        where: { id: loanId, readerId },
+        relations: { copy: true },
+      });
+      if (!loan) {
+        throw new NotFoundException('借阅记录不存在');
+      }
+      if (loan.returnedAt) {
+        throw new BadRequestException('该借阅已归还，无法续借');
+      }
+
+      const reader = await manager.getRepository(Reader).findOne({
+        where: { id: loan.readerId },
+      });
+      if (!reader) {
+        throw new BadRequestException('借阅记录的读者不存在');
+      }
+      const rule = await manager
+        .getRepository(LoanRule)
+        .findOne({ where: { readerType: reader.readerType } });
+      if (!rule) {
+        throw new BadRequestException('该读者类型的借阅规则未配置');
+      }
+      if (loan.renewalCount >= rule.renewalLimit) {
+        throw new BadRequestException(
+          `已达到续借次数上限（${rule.renewalLimit} 次）`,
+        );
+      }
+
+      loan.renewalCount += 1;
+      loan.dueAt = new Date(
+        loan.dueAt.getTime() + rule.loanDurationDays * 24 * 60 * 60 * 1000,
+      );
+      const saved = await manager.getRepository(Loan).save(loan);
+      return toView(saved, loan.copy.barcode);
     });
   }
 

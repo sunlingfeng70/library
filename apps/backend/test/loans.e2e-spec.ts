@@ -131,11 +131,11 @@ describe('loans (e2e)', () => {
       'TRUNCATE "loan", "loan_rule", "reader", "staff", "bibliographic_record", "copy" RESTART IDENTITY CASCADE',
     );
     await dataSource.query(`
-      INSERT INTO "loan_rule" ("reader_type", "max_active_loans", "loan_duration_days", "fine_daily_fee_cents", "grace_days") VALUES
-        ('student', 5, 30, 50, 3),
-        ('teacher', 10, 60, 50, 3),
-        ('adult', 5, 30, 50, 3),
-        ('child', 3, 21, 30, 3)
+      INSERT INTO "loan_rule" ("reader_type", "max_active_loans", "loan_duration_days", "fine_daily_fee_cents", "grace_days", "renewal_limit") VALUES
+        ('student', 5, 30, 50, 3, 1),
+        ('teacher', 10, 60, 50, 3, 2),
+        ('adult', 5, 30, 50, 3, 1),
+        ('child', 3, 21, 30, 3, 0)
     `);
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -642,6 +642,109 @@ describe('loans (e2e)', () => {
         .patch(`/loans/fines/${fineId}/settle`)
         .set('Authorization', `Bearer ${noFineToken}`)
         .expect(403);
+      expect(res.body.message).toBeTruthy();
+    });
+  });
+
+  describe('T8 读者可续借在借的副本', () => {
+    it('续借成功：dueAt 按规则期限延长，renewalCount 递增', async () => {
+      const reader = await seedReader(`CR-REN1-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-REN1-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const circulationToken = await staffToken(circulation);
+      const mine = await readerToken(reader);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+      const dueBefore = new Date((checkout.body as { dueAt: string }).dueAt).getTime();
+
+      const res = await request(app.getHttpServer())
+        .post(`/loans/me/${loanId}/renew`)
+        .set('Authorization', `Bearer ${mine}`)
+        .expect(201);
+      expect(res.body).toMatchObject({ id: loanId, renewalCount: 1, returnedAt: null });
+      const dueAfter = new Date((res.body as { dueAt: string }).dueAt).getTime();
+      expect(dueAfter - dueBefore).toBe(30 * 24 * 60 * 60 * 1000);
+    });
+
+    it('达到续借次数上限被拒绝（400）', async () => {
+      const rule = await dataSource.getRepository(LoanRule).findOne({
+        where: { readerType: 'student' },
+      });
+      if (rule) {
+        rule.renewalLimit = 0;
+        await dataSource.getRepository(LoanRule).save(rule);
+      }
+
+      const reader = await seedReader(`CR-REN2-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-REN2-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const circulationToken = await staffToken(circulation);
+      const mine = await readerToken(reader);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      const res = await request(app.getHttpServer())
+        .post(`/loans/me/${loanId}/renew`)
+        .set('Authorization', `Bearer ${mine}`)
+        .expect(400);
+      expect(res.body.message).toContain('续借次数上限');
+    });
+
+    it('非本人续借他人的借阅被拒绝（404）', async () => {
+      const readerA = await seedReader(`CR-REN3A-${Date.now()}`);
+      const readerB = await seedReader(`CR-REN3B-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-REN3-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const circulationToken = await staffToken(circulation);
+      const mineB = await readerToken(readerB);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: readerA.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      await request(app.getHttpServer())
+        .post(`/loans/me/${loanId}/renew`)
+        .set('Authorization', `Bearer ${mineB}`)
+        .expect(404);
+    });
+
+    it('已归还的借阅无法续借（400）', async () => {
+      const reader = await seedReader(`CR-REN4-${Date.now()}`);
+      const copy = await seedAvailableCopy(`BC-REN4-${Date.now()}`);
+      const circulation = await seedLibrarian([Permission.Circulation]);
+      const circulationToken = await staffToken(circulation);
+      const mine = await readerToken(reader);
+
+      const checkout = await request(app.getHttpServer())
+        .post('/loans')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ readerCardNumber: reader.cardNumber, barcode: copy.barcode })
+        .expect(201);
+      const loanId = checkout.body.id as string;
+
+      await request(app.getHttpServer())
+        .post('/loans/return')
+        .set('Authorization', `Bearer ${circulationToken}`)
+        .send({ barcode: copy.barcode })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post(`/loans/me/${loanId}/renew`)
+        .set('Authorization', `Bearer ${mine}`)
+        .expect(400);
       expect(res.body.message).toBeTruthy();
     });
   });
