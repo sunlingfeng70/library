@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
+import { ReservationsModule } from '../reservations/reservations.module';
 import { Staff } from '../staff/staff.entity';
 import { Fine } from './fine.entity';
 import { Loan } from './loan.entity';
@@ -9,7 +10,7 @@ import { LoansController } from './loans.controller';
 import { LoansService } from './loans.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Loan, LoanRule, Fine, Staff]), AuthModule],
+  imports: [TypeOrmModule.forFeature([Loan, LoanRule, Fine, Staff]), AuthModule, ReservationsModule],
   controllers: [LoansController],
   providers: [LoansService],
   exports: [LoansService],

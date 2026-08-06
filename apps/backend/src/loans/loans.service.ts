@@ -4,6 +4,7 @@ import { IsNotEmpty, IsString } from 'class-validator';
 import { DataSource, Repository } from 'typeorm';
 import { Copy, CopyStatus } from '../copies/copy.entity';
 import { Reader } from '../readers/reader.entity';
+import { ReservationsService } from '../reservations/reservations.service';
 import { Fine } from './fine.entity';
 import { LoanRule } from './loan-rule.entity';
 import { Loan } from './loan.entity';
@@ -79,6 +80,7 @@ export class LoansService {
     @InjectRepository(Loan) private readonly loans: Repository<Loan>,
     @InjectRepository(Fine) private readonly fines: Repository<Fine>,
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly reservations: ReservationsService,
   ) {}
 
   async checkout(dto: CheckoutDto): Promise<LoanView> {
@@ -101,7 +103,8 @@ export class LoansService {
       if (!copy) {
         throw new NotFoundException('馆藏副本不存在');
       }
-      if (copy.status !== CopyStatus.Available) {
+      const onHold = copy.status === CopyStatus.OnHold;
+      if (!onHold && copy.status !== CopyStatus.Available) {
         throw new BadRequestException(`馆藏副本不在馆（当前状态：${copy.status}）`);
       }
 
@@ -127,8 +130,12 @@ export class LoansService {
       const now = new Date();
       const dueAt = new Date(now.getTime() + rule.loanDurationDays * 24 * 60 * 60 * 1000);
 
+      if (onHold) {
+        await this.reservations.fulfillOnCheckout(manager, reader.id, copy.id);
+      }
+
       const updated = await manager.getRepository(Copy).update(
-        { id: copy.id, status: CopyStatus.Available },
+        { id: copy.id, status: onHold ? CopyStatus.OnHold : CopyStatus.Available },
         { status: CopyStatus.Borrowed },
       );
       if (!updated.affected || updated.affected === 0) {
@@ -182,11 +189,18 @@ export class LoansService {
       loan.returnedAt = now;
       const saved = await manager.getRepository(Loan).save(loan);
 
-      const updatedCopy = await manager.getRepository(Copy).update(
+      const returningCopy = await manager.getRepository(Copy).findOne({
+        where: { id: copy.id },
+      });
+      if (!returningCopy || returningCopy.status !== CopyStatus.Borrowed) {
+        throw new BadRequestException('副本状态异常，归还已回滚');
+      }
+      const allocated = await this.reservations.allocateNextOnReturn(manager, copy.id);
+      const updated = await manager.getRepository(Copy).update(
         { id: copy.id, status: CopyStatus.Borrowed },
-        { status: CopyStatus.Available },
+        { status: allocated ? CopyStatus.OnHold : CopyStatus.Available },
       );
-      if (!updatedCopy.affected || updatedCopy.affected === 0) {
+      if (!updated.affected || updated.affected === 0) {
         throw new BadRequestException('副本状态异常，归还已回滚');
       }
 
