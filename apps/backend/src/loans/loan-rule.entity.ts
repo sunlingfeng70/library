@@ -16,4 +16,7 @@ export class LoanRule {
 
   @Column({ name: 'grace_days', type: 'int' })
   graceDays!: number;
+
+  @Column({ name: 'renewal_limit', type: 'int' })
+  renewalLimit!: number;
 }

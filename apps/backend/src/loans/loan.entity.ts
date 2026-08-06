@@ -36,6 +36,9 @@ export class Loan {
   @Column({ name: 'due_at' })
   dueAt!: Date;
 
+  @Column({ name: 'renewal_count', type: 'int', default: 0 })
+  renewalCount!: number;
+
   @Column({ name: 'returned_at', type: 'timestamp', nullable: true })
   returnedAt!: Date | null;
 
